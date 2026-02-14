@@ -1,22 +1,13 @@
-import { invoke } from "@tauri-apps/api/core";
+import Phaser from "phaser"
+import VerticalScrolling from "./scenes/vertical"
 
-let greetInputEl: HTMLInputElement | null;
-let greetMsgEl: HTMLElement | null;
-
-async function greet() {
-  if (greetMsgEl && greetInputEl) {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsgEl.textContent = await invoke("greet", {
-      name: greetInputEl.value,
-    });
-  }
+const gameConfig = {
+    type: Phaser.AUTO,
+    width: 256,
+    height: 224,
+    backgroundColor: "black",
+    parent: "container",
+    scene: VerticalScrolling,
 }
 
-window.addEventListener("DOMContentLoaded", () => {
-  greetInputEl = document.querySelector("#greet-input");
-  greetMsgEl = document.querySelector("#greet-msg");
-  document.querySelector("#greet-form")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    greet();
-  });
-});
+new Phaser.Game(gameConfig)
