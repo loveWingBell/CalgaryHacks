@@ -275,7 +275,7 @@ export default class VerticalScrolling extends Phaser.Scene {
 
 		// If we found a nearby breakable within collision range
 		if (nearestBreakable && nearestBreakableDist <= 12) {
-			console.log('BOUNCE on BREAKABLE at Y=${nearestBreakable.y} (dist=${nearestBreakableDist.toFixed(1)}px)`)
+			console.log(`BOUNCE on BREAKABLE at Y=${nearestBreakable.y} (dist=${nearestBreakableDist.toFixed(1)}px)`)
 			this.triggerBounce()
 			nearestBreakable.breakPlatform()
 			this.score += 15
