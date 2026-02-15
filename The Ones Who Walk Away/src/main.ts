@@ -1,10 +1,10 @@
-import Phaser, { Physics } from "phaser";
-import VerticalScrolling from "./scenes/vertical";
+import Phaser from "phaser"
+import VerticalScrolling from "./scenes/vertical"
 
 const gameConfig = {
 	type: Phaser.AUTO,
-	width: 176,
-	height: 350,
+	width: 300,
+	height: window.innerHeight,
 	backgroundColor: "black",
 	parent: "container",
 	scene: VerticalScrolling,
@@ -15,6 +15,6 @@ const gameConfig = {
 			debug: false,
 		},
 	},
-};
+}
 
-new Phaser.Game(gameConfig);
+new Phaser.Game(gameConfig)
