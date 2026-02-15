@@ -1,107 +1,95 @@
 import Phaser from "phaser"
-import marioUrl from "/public/assets/sprites/mario.webp"
+import Player from "../classes/Player"
+import playerSpritePath from "/public/assets/sprites/mario.webp"
 import backgroundUrl from "/public/assets/background.webp"
+import platformUrl from "/public/assets/platform.jpg"
 
-class VerticalScrolling extends Phaser.Scene {
-	private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody
+export default class VerticalScrolling extends Phaser.Scene {
+	private player!: Player
 	private background!: Phaser.GameObjects.TileSprite
-	private cursors!: any
-	private keys!: any
+	private platforms!: Phaser.Physics.Arcade.StaticGroup
+
+	public worldHeight = 3000
+	public playerImage = { name: "player", path: playerSpritePath }
+	public backgroundImage = { name: "background", path: backgroundUrl }
+	public platformImage = { name: "platform", path: platformUrl }
 
 	constructor() {
 		super("VerticalScrolling")
 	}
 
 	preload() {
-		this.load.image("mario", marioUrl)
-		this.load.image("background", backgroundUrl)
+		this.load.image(this.playerImage.name, this.playerImage.path)
+		this.load.image(this.backgroundImage.name, backgroundUrl)
 	}
 
 	create() {
-		const player = { width: 32, height: 32 }
-
-		// Create a TileSprite covering the screen
-		const { width, height } = this.scale
-		this.background = this.add
-			.tileSprite(0, 0, width, height, "background")
-			.setOrigin(0, 0)
-			.setScrollFactor(0) // Keeps the object from moving with the camera
-
-		// CREATE PLAYER
-		// 1. Initialize Sprite
-		this.player = this.physics.add.sprite(
-			width / 2 - player.width / 2,
-			100,
-			"mario",
-		)
-
-		// 2. Set Visual Size
-		this.player.setDisplaySize(player.width, player.height)
-
-		// 3. Set Origin to Top-Left
-		this.player.setOrigin(0, 0)
-
-		// 4. Critical: Reset the physics body to match the top-left origin
-		// Passing 'false' to the third argument prevents Phaser from
-		// trying to center the body on the origin.
-		this.player.body.setSize(player.width, player.height, false)
-
-		// 5. Ensure the body offset is zeroed out
-		this.player.body.setOffset(0, player.height * 4)
-
-		// 6. Enable world bounds collision
-		this.player.setCollideWorldBounds(true)
-
-		// Define standard arrow keys + space/shift
-		this.cursors = this.input.keyboard?.createCursorKeys()
-
-		// Define specific keys (A and D)
-		this.keys = this.input.keyboard?.addKeys({
-			a: Phaser.Input.Keyboard.KeyCodes.A,
-			d: Phaser.Input.Keyboard.KeyCodes.D,
-		})
-
-		// World height
-		const worldHeight = 2000
-		this.physics.world.setBounds(0, 0, 256, worldHeight)
-		this.player.setCollideWorldBounds(true)
-
-		// Keep player in vertical center of the screen
-		this.cameras.main.setBounds(0, 0, 256, worldHeight)
-		this.cameras.main.startFollow(this.player, true, 0, 1)
+		this.createBackground()
+		this.createPlatforms()
+		this.createPlayer()
+		this.setupCamera()
 	}
 
 	update() {
-		const speed = 300
-		const jumpForce = 2
-		let hasLanded = true
+		// Delegate update logic to the player class
+		this.player.update()
 
-		// Scroll the background texture based on player velocity or position
-		// tilePositionY moves the texture vertically within the sprite
+		// Scene-specific updates (Background parallax)
 		this.background.tilePositionY = this.cameras.main.scrollY * 0.5
+	}
 
-		// Reset velocity every frame
-		this.player.setVelocityX(0)
+	private createBackground() {
+		const { width, height } = this.scale
+		this.background = this.add
+			.tileSprite(0, 0, width, height, this.backgroundImage.name)
+			.setOrigin(0, 0)
+			.setScrollFactor(0)
+	}
 
-		// Check for Left movement (Left Arrow OR A key)
-		if (this.cursors.left.isDown || this.keys.a.isDown) {
-			this.player.setVelocityX(-speed)
+	private createPlatforms() {
+		const platformDimensions = { width: this.scale.width / 3, height: 32 }
+
+		this.physics.world.setBounds(0, 0, this.scale.width, this.worldHeight)
+
+		this.platforms = this.physics.add.staticGroup()
+
+		const platformCount = 30
+		for (let i = 0; i < platformCount; i++) {
+			const x = Phaser.Math.Between(
+				0,
+				this.scale.width + platformDimensions.width / 10,
+			)
+			const y =
+				this.worldHeight - 200 - i * (this.worldHeight / platformCount)
+
+			const platform = this.platforms.create(
+				x,
+				y,
+				this.platformImage.name,
+			)
+			platform.setDisplaySize(
+				platformDimensions.width,
+				platformDimensions.height,
+			)
+			platform.refreshBody()
 		}
-		// Check for Right movement (Right Arrow OR D key)
-		else if (this.cursors.right.isDown || this.keys.d.isDown) {
-			this.player.setVelocityX(speed)
-			console.log(this.player.x)
-		}
-		// Check for jump input
+	}
 
-		if (this.cursors.up.isDown && this.player.body.blocked.down) {
-			hasLanded = false
-			this.player.setVelocityY(jumpForce * -speed)
-			console.log(`hasLanded: ${hasLanded}`)
-		}
+	private createPlayer() {
+		// Instantiate the custom Player class
+		this.player = new Player(
+			this,
+			this.scale.width / 2 - 16,
+			100,
+			this.playerImage.name,
+		)
 
-		console.log(this.player.y)
+		// Add collision between the new player object and platforms
+		this.physics.add.collider(this.player, this.platforms)
+	}
+
+	private setupCamera() {
+		this.cameras.main.setBounds(0, 0, 256, this.worldHeight)
+		this.cameras.main.startFollow(this.player, true, 0, 1)
 	}
 }
-
-export default VerticalScrolling
