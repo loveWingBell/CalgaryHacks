@@ -1,95 +1,508 @@
 import Phaser from "phaser"
 import Player from "../classes/Player"
-import playerSpritePath from "/public/assets/sprites/mario.webp"
-import backgroundUrl from "/public/assets/background.webp"
-import platformUrl from "/public/assets/platform.jpg"
+import Platform from "../classes/Platform"
+import Enemy from "../classes/Enemy"
+
+//NOTE: CURRENTLY IN debug mode bc i'm trying to figure out why the bounce loop was happening.
 
 export default class VerticalScrolling extends Phaser.Scene {
 	private player!: Player
 	private background!: Phaser.GameObjects.TileSprite
-	private platforms!: Phaser.Physics.Arcade.StaticGroup
+	private platforms: Platform[] = []
+	private enemies: Enemy[] = []
 
-	public worldHeight = 3000
-	public playerImage = { name: "player", path: playerSpritePath }
-	public backgroundImage = { name: "background", path: backgroundUrl }
-	public platformImage = { name: "platform", path: platformUrl }
+	// Spawning
+	private lastSpawnY = 0
+	private spawnInterval = 150
+	private initialSpawnY = 100
+
+	// Difficulty scaling
+	private distanceTraveled = 0
+	private difficultyLevel = 0
+	private enemySpawnChance = 0.25
+	private breakablePlatformChance = 0.35
+
+	// Score/Stats
+	private scoreText!: Phaser.GameObjects.Text
+	private score = 0
+
+	// Collision tracking
+	private justBounced = false
+	private bounceCooldownTimer?: Phaser.Time.TimerEvent
+	private lastBounceY = -1000 // Track where last bounce happened
+	private minimumFallDistance = 80 // Must fall at least this far before bouncing again
+
+	// Debug
+	private debugMode = true // TURN ON DEBUG
+	private debugGraphics!: Phaser.GameObjects.Graphics
+	private debugText!: Phaser.GameObjects.Text
 
 	constructor() {
 		super("VerticalScrolling")
 	}
 
 	preload() {
-		this.load.image(this.playerImage.name, this.playerImage.path)
-		this.load.image(this.backgroundImage.name, backgroundUrl)
+		const graphics = this.make.graphics({ x: 0, y: 0 }, false)
+		graphics.fillStyle(0xffff00, 1)
+		graphics.fillCircle(4, 4, 4)
+		graphics.generateTexture("bullet", 8, 8)
+		graphics.destroy()
 	}
 
 	create() {
 		this.createBackground()
-		this.createPlatforms()
 		this.createPlayer()
 		this.setupCamera()
+		this.createUI()
+
+		if (this.debugMode) {
+			this.debugGraphics = this.add.graphics()
+			this.debugGraphics.setDepth(1000)
+			
+			this.debugText = this.add
+				.text(10, 80, "", {
+					fontSize: "12px",
+					color: "#00ff00",
+					fontFamily: "Courier",
+					backgroundColor: "#000000",
+				})
+				.setScrollFactor(0)
+				.setDepth(101)
+		}
+
+		this.lastSpawnY = this.player.y
+
+		for (let i = 0; i < 20; i++) {
+			this.spawnPlatform()
+		}
+
+		this.updatePhysicsCollisions()
+
+		console.log(`=== GAME STARTED ===`)
+		console.log(`Solid: ${this.platforms.filter(p => p.platformType === 'solid').length}`)
+		console.log(`Breakable: ${this.platforms.filter(p => p.platformType === 'breakable').length}`)
+		console.log(`Enemies: ${this.enemies.length}`)
 	}
 
 	update() {
-		// Delegate update logic to the player class
 		this.player.update()
 
-		// Scene-specific updates (Background parallax)
+		const newDistance = Math.floor((this.player.y - this.initialSpawnY) / 100)
+		if (newDistance > this.distanceTraveled) {
+			this.distanceTraveled = newDistance
+			this.updateDifficulty()
+		}
+
+		this.enemies.forEach((enemy) => {
+			if (!enemy.isDestroyed) {
+				enemy.update()
+			}
+		})
+
+		const spawnThreshold = this.lastSpawnY + this.spawnInterval
+		if (this.player.y > spawnThreshold) {
+			this.spawnPlatform()
+			this.updatePhysicsCollisions()
+		}
+
+		this.cleanupOffscreenObjects()
+
+		// ONLY check bounce collisions if not in cooldown
+		if (!this.justBounced) {
+			this.checkBounceCollisions()
+		}
+
+		if (this.debugMode) {
+			this.drawDebug()
+			this.updateDebugText()
+		}
+
 		this.background.tilePositionY = this.cameras.main.scrollY * 0.5
+		this.scoreText.setText(`Score: ${this.score}\nDepth: ${this.distanceTraveled}m\nPlatforms: ${this.platforms.length}`)
+
+		if (this.player.isDead()) {
+			this.gameOver()
+		}
 	}
 
 	private createBackground() {
 		const { width, height } = this.scale
+		
+		const bgGraphics = this.make.graphics({ x: 0, y: 0 }, false)
+		bgGraphics.fillStyle(0x0a0a1a, 1)
+		bgGraphics.fillRect(0, 0, width, height)
+		for (let i = 0; i < 50; i++) {
+			const x = Math.random() * width
+			const y = Math.random() * height
+			const size = Math.random() * 2
+			bgGraphics.fillStyle(0xffffff, Math.random() * 0.8 + 0.2)
+			bgGraphics.fillCircle(x, y, size)
+		}
+		bgGraphics.generateTexture("background", width, height)
+		bgGraphics.destroy()
+
 		this.background = this.add
-			.tileSprite(0, 0, width, height, this.backgroundImage.name)
+			.tileSprite(0, 0, width, height, "background")
 			.setOrigin(0, 0)
 			.setScrollFactor(0)
 	}
 
-	private createPlatforms() {
-		const platformDimensions = { width: this.scale.width / 3, height: 32 }
-
-		this.physics.world.setBounds(0, 0, this.scale.width, this.worldHeight)
-
-		this.platforms = this.physics.add.staticGroup()
-
-		const platformCount = 30
-		for (let i = 0; i < platformCount; i++) {
-			const x = Phaser.Math.Between(
-				0,
-				this.scale.width + platformDimensions.width / 10,
-			)
-			const y =
-				this.worldHeight - 200 - i * (this.worldHeight / platformCount)
-
-			const platform = this.platforms.create(
-				x,
-				y,
-				this.platformImage.name,
-			)
-			platform.setDisplaySize(
-				platformDimensions.width,
-				platformDimensions.height,
-			)
-			platform.refreshBody()
-		}
-	}
-
 	private createPlayer() {
-		// Instantiate the custom Player class
-		this.player = new Player(
-			this,
-			this.scale.width / 2 - 16,
-			100,
-			this.playerImage.name,
-		)
-
-		// Add collision between the new player object and platforms
-		this.physics.add.collider(this.player, this.platforms)
+		this.player = new Player(this, this.scale.width / 2, this.initialSpawnY)
 	}
 
 	private setupCamera() {
-		this.cameras.main.setBounds(0, 0, 256, this.worldHeight)
-		this.cameras.main.startFollow(this.player, true, 0, 1)
+		this.cameras.main.setBounds(0, -1000, this.scale.width, 20000)
+		this.cameras.main.startFollow(this.player, true, 0, 0.1)
+	}
+
+	private createUI() {
+		this.scoreText = this.add
+			.text(10, 10, "Score: 0\nDepth: 0m", {
+				fontSize: "16px",
+				color: "#ffffff",
+				fontFamily: "Arial",
+			})
+			.setScrollFactor(0)
+			.setDepth(100)
+	}
+
+	private updatePhysicsCollisions() {
+		this.physics.world.colliders.getActive().forEach((collider) => {
+			collider.destroy()
+		})
+
+		const solidPlatforms = this.platforms.filter(
+			(p) => !p.isDestroyed && p.platformType === "solid"
+		)
+		
+		solidPlatforms.forEach((platform) => {
+			this.physics.add.collider(this.player, platform)
+		})
+
+		const allActivePlatforms = this.platforms.filter((p) => !p.isDestroyed)
+		this.enemies.forEach((enemy) => {
+			if (!enemy.isDestroyed) {
+				allActivePlatforms.forEach((platform) => {
+					this.physics.add.collider(enemy, platform)
+				})
+			}
+		})
+	}
+
+	private spawnPlatform() {
+		const platformWidth = 80
+		const minX = 20
+		const maxX = this.scale.width - platformWidth - 20
+
+		const x = Phaser.Math.Between(minX, maxX)
+		const y = this.lastSpawnY + this.spawnInterval
+
+		const rand = Math.random()
+		const platformType = rand < this.breakablePlatformChance ? "breakable" : "solid"
+
+		const platform = new Platform(this, x, y, platformType)
+		this.platforms.push(platform)
+
+		const enemyRand = Math.random()
+		if (enemyRand < this.enemySpawnChance) {
+			const enemyX = x + platformWidth / 2
+			const enemyY = y - 24
+			this.spawnEnemy(enemyX, enemyY, platform)
+		}
+
+		this.lastSpawnY = y
+	}
+
+	private spawnEnemy(x: number, y: number, platform: Platform) {
+		const enemy = new Enemy(this, x, y, platform)
+		this.enemies.push(enemy)
+		this.physics.add.collider(enemy, platform)
+	}
+
+	private checkBounceCollisions() {
+		const playerBody = this.player.body as Phaser.Physics.Arcade.Body
+		
+		// MUST be moving downward with significant velocity
+		if (playerBody.velocity.y < 100) {
+			return
+		}
+
+		// MUST have fallen far enough since last bounce
+		const distanceSinceLastBounce = Math.abs(this.player.y - this.lastBounceY)
+		if (distanceSinceLastBounce < this.minimumFallDistance) {
+			console.log(`⏸️ Too soon to bounce (only ${distanceSinceLastBounce.toFixed(0)}px, need ${this.minimumFallDistance})`)
+			return
+		}
+
+		const playerBottom = playerBody.bottom
+		const playerCenterX = playerBody.center.x
+		const playerLeft = playerBody.left
+		const playerRight = playerBody.right
+
+		// Check breakable platforms - ONLY platforms BELOW the player
+		let nearestBreakable: Platform | null = null
+		let nearestBreakableDist = Infinity
+
+		for (const platform of this.platforms) {
+			if (platform.isDestroyed || !platform.active || platform.platformType !== "breakable") {
+				continue
+			}
+
+			const platformBody = platform.body as Phaser.Physics.Arcade.StaticBody
+			const platformTop = platformBody.top
+			const platformLeft = platformBody.left
+			const platformRight = platformBody.right
+
+			// Only check platforms BELOW the player
+			if (platformTop < playerBottom) {
+				continue
+			}
+
+			// Calculate vertical distance (platform is below player)
+			const vertDist = platformTop - playerBottom
+			
+			// Check horizontal overlap
+			const hasHorizontalOverlap = 
+				(playerCenterX >= platformLeft && playerCenterX <= platformRight) ||
+				(playerLeft < platformRight && playerRight > platformLeft)
+
+			if (hasHorizontalOverlap && vertDist < nearestBreakableDist) {
+				nearestBreakableDist = vertDist
+				nearestBreakable = platform
+			}
+		}
+
+		// If we found a nearby breakable within collision range
+		if (nearestBreakable && nearestBreakableDist <= 12) {
+			console.log('BOUNCE on BREAKABLE at Y=${nearestBreakable.y} (dist=${nearestBreakableDist.toFixed(1)}px)`)
+			this.triggerBounce()
+			nearestBreakable.breakPlatform()
+			this.score += 15
+			return
+		}
+
+		// Check enemies BELOW the player
+		let nearestEnemy: Enemy | null = null
+		let nearestEnemyDist = Infinity
+
+		for (const enemy of this.enemies) {
+			if (enemy.isDestroyed || !enemy.active) {
+				continue
+			}
+
+			const enemyBody = enemy.body as Phaser.Physics.Arcade.Body
+			const enemyTop = enemyBody.top
+			const enemyLeft = enemyBody.left
+			const enemyRight = enemyBody.right
+
+			if (enemyTop < playerBottom) {
+				continue
+			}
+
+			const vertDist = enemyTop - playerBottom
+			
+			const hasHorizontalOverlap = 
+				(playerCenterX >= enemyLeft && playerCenterX <= enemyRight) ||
+				(playerLeft < enemyRight && playerRight > enemyLeft)
+
+			if (hasHorizontalOverlap && vertDist < nearestEnemyDist) {
+				nearestEnemyDist = vertDist
+				nearestEnemy = enemy
+			}
+		}
+
+		if (nearestEnemy && nearestEnemyDist <= 12) {
+			console.log(`BOUNCE on ENEMY at Y=${nearestEnemy.y} (dist=${nearestEnemyDist.toFixed(1)}px)`)
+			this.triggerBounce()
+			nearestEnemy.destroy()
+			this.score += 50
+			return
+		}
+
+		// Check bullets hitting enemies
+		this.children.each((child) => {
+			if (
+				child instanceof Phaser.Physics.Arcade.Sprite &&
+				child.texture.key === "bullet" &&
+				child.active
+			) {
+				const bulletBody = child.body as Phaser.Physics.Arcade.Body
+				
+				for (const enemy of this.enemies) {
+					if (enemy.isDestroyed || !enemy.active) {
+						continue
+					}
+					
+					const enemyBody = enemy.body as Phaser.Physics.Arcade.Body
+					
+					if (Phaser.Geom.Intersects.RectangleToRectangle(bulletBody, enemyBody)) {
+						child.destroy()
+						enemy.destroy()
+						this.score += 25
+						console.log(" Shot enemy!")
+						return
+					}
+				}
+			}
+		})
+	}
+
+	private triggerBounce() {
+		this.player.bounce()
+		this.justBounced = true
+		this.lastBounceY = this.player.y // Remember where we bounced
+		
+		if (this.bounceCooldownTimer) {
+			this.bounceCooldownTimer.destroy()
+		}
+		
+		console.log(`Bounce locked for 600ms at Y=${this.player.y.toFixed(0)}`)
+		
+		this.bounceCooldownTimer = this.time.delayedCall(600, () => {
+			this.justBounced = false
+			console.log(`Bounce unlocked`)
+		})
+	}
+
+	private drawDebug() {
+		this.debugGraphics.clear()
+		
+		const playerBody = this.player.body as Phaser.Physics.Arcade.Body
+		
+		// Player hitbox - color based on bounce state
+		const playerColor = this.justBounced ? 0xff0000 : 0x00ff00
+		this.debugGraphics.lineStyle(3, playerColor)
+		this.debugGraphics.strokeRect(playerBody.x, playerBody.y, playerBody.width, playerBody.height)
+		
+		// Player center point
+		this.debugGraphics.fillStyle(playerColor, 1)
+		this.debugGraphics.fillCircle(playerBody.center.x, playerBody.center.y, 3)
+		
+		// Platforms
+		this.platforms.forEach((platform) => {
+			if (!platform.isDestroyed) {
+				const color = platform.platformType === "breakable" ? 0xff00ff : 0x00ffff
+				const body = platform.body as Phaser.Physics.Arcade.StaticBody
+				this.debugGraphics.lineStyle(2, color, 0.5)
+				this.debugGraphics.strokeRect(body.x, body.y, body.width, body.height)
+			}
+		})
+		
+		// Enemies
+		this.enemies.forEach((enemy) => {
+			if (!enemy.isDestroyed) {
+				const body = enemy.body as Phaser.Physics.Arcade.Body
+				this.debugGraphics.lineStyle(2, 0xff0000, 0.7)
+				this.debugGraphics.strokeRect(body.x, body.y, body.width, body.height)
+			}
+		})
+	}
+
+	private updateDebugText() {
+		const playerBody = this.player.body as Phaser.Physics.Arcade.Body
+		const velY = playerBody.velocity.y.toFixed(1)
+		const posY = this.player.y.toFixed(1)
+		const bounceState = this.justBounced ? "LOCKED" : "READY ✓"
+		const distSinceBounce = Math.abs(this.player.y - this.lastBounceY).toFixed(1)
+		
+		// Find nearest bounceable object
+		let nearestInfo = "None"
+		let minDist = Infinity
+		
+		for (const platform of this.platforms) {
+			if (platform.platformType === "breakable" && !platform.isDestroyed) {
+				const dist = Math.abs(playerBody.bottom - (platform.body as any).top)
+				if (dist < minDist) {
+					minDist = dist
+					nearestInfo = `Breakable ${dist.toFixed(0)}px below`
+				}
+			}
+		}
+		
+		for (const enemy of this.enemies) {
+			if (!enemy.isDestroyed) {
+				const dist = Math.abs(playerBody.bottom - (enemy.body as any).top)
+				if (dist < minDist) {
+					minDist = dist
+					nearestInfo = `Enemy ${dist.toFixed(0)}px below`
+				}
+			}
+		}
+		
+		this.debugText.setText(
+			`VelY: ${velY}\n` +
+			`PosY: ${posY}\n` +
+			`Bounce: ${bounceState}\n` +
+			`Dist since bounce: ${distSinceBounce}px\n` +
+			`Nearest: ${nearestInfo}`
+		)
+	}
+
+	private cleanupOffscreenObjects() {
+		const cameraTop = this.cameras.main.scrollY - 200
+
+		const beforeCount = this.platforms.length
+		this.platforms = this.platforms.filter((platform) => {
+			if (platform.y < cameraTop || platform.isDestroyed) {
+				if (!platform.isDestroyed) {
+					platform.destroy()
+				}
+				return false
+			}
+			return true
+		})
+		
+		if (this.platforms.length < beforeCount) {
+			this.updatePhysicsCollisions()
+		}
+
+		this.enemies = this.enemies.filter((enemy) => {
+			if (enemy.y < cameraTop || enemy.isDestroyed) {
+				if (!enemy.isDestroyed) {
+					enemy.destroy()
+				}
+				return false
+			}
+			return true
+		})
+	}
+
+	private updateDifficulty() {
+		this.difficultyLevel = Math.floor(this.distanceTraveled / 10)
+		this.enemySpawnChance = Math.min(0.25 + this.difficultyLevel * 0.04, 0.6)
+		this.breakablePlatformChance = Math.min(0.35 + this.difficultyLevel * 0.04, 0.7)
+		this.spawnInterval = Math.max(110, 150 - this.difficultyLevel * 3)
+
+		console.log(`📊 Difficulty ${this.difficultyLevel}`)
+	}
+
+	private gameOver() {
+		console.log(`GAME OVER - Score: ${this.score}, Depth: ${this.distanceTraveled}m`)
+		
+		const gameOverText = this.add
+			.text(
+				this.scale.width / 2,
+				this.cameras.main.scrollY + this.scale.height / 2,
+				`GAME OVER\n\nFinal Score: ${this.score}\nDepth: ${this.distanceTraveled}m\n\nPress SPACE to restart`,
+				{
+					fontSize: "20px",
+					color: "#ffffff",
+					fontFamily: "Arial",
+					align: "center",
+				},
+			)
+			.setOrigin(0.5)
+			.setScrollFactor(0)
+			.setDepth(200)
+
+		this.physics.pause()
+
+		const restartKey = this.input.keyboard!.addKey(
+			Phaser.Input.Keyboard.KeyCodes.SPACE,
+		)
+		restartKey.once("down", () => {
+			this.scene.restart()
+		})
 	}
 }
