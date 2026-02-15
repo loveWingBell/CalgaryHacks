@@ -3,13 +3,14 @@ import Player from "../classes/Player"
 import Platform from "../classes/Platform"
 import Enemy from "../classes/Enemy"
 
-//NOTE: CURRENTLY IN debug mode bc i'm trying to figure out why the bounce loop was happening.
+//NOTE: FIXED! will remove after this push
 
 export default class VerticalScrolling extends Phaser.Scene {
 	private player!: Player
 	private background!: Phaser.GameObjects.TileSprite
 	private platforms: Platform[] = []
 	private enemies: Enemy[] = []
+	private platformColliders: Map<Platform, Phaser.Physics.Arcade.Collider> = new Map()
 
 	// Spawning
 	private lastSpawnY = 0
@@ -31,6 +32,8 @@ export default class VerticalScrolling extends Phaser.Scene {
 	private bounceCooldownTimer?: Phaser.Time.TimerEvent
 	private lastBounceY = -1000 // Track where last bounce happened
 	private minimumFallDistance = 80 // Must fall at least this far before bouncing again
+	private lastSolidLandingY = -1000 // Track last solid platform landing
+	private solidLandingCooldown = false
 
 	// Debug
 	private debugMode = true // TURN ON DEBUG
@@ -76,8 +79,6 @@ export default class VerticalScrolling extends Phaser.Scene {
 			this.spawnPlatform()
 		}
 
-		this.updatePhysicsCollisions()
-
 		console.log(`=== GAME STARTED ===`)
 		console.log(`Solid: ${this.platforms.filter(p => p.platformType === 'solid').length}`)
 		console.log(`Breakable: ${this.platforms.filter(p => p.platformType === 'breakable').length}`)
@@ -86,6 +87,13 @@ export default class VerticalScrolling extends Phaser.Scene {
 
 	update() {
 		this.player.update()
+
+		// Check if player is somehow stuck (shouldn't happen with world bounds disabled)
+		const playerBody = this.player.body as Phaser.Physics.Arcade.Body
+		if (playerBody.blocked.down || playerBody.blocked.up) {
+			console.log(`⚠️ WARNING: Player blocked! down=${playerBody.blocked.down}, up=${playerBody.blocked.up}, Y=${this.player.y.toFixed(0)}`)
+			console.log(`   Velocity: ${playerBody.velocity.y.toFixed(1)}, World bounds disabled: ${!playerBody.collideWorldBounds}`)
+		}
 
 		const newDistance = Math.floor((this.player.y - this.initialSpawnY) / 100)
 		if (newDistance > this.distanceTraveled) {
@@ -99,17 +107,55 @@ export default class VerticalScrolling extends Phaser.Scene {
 			}
 		})
 
-		const spawnThreshold = this.lastSpawnY + this.spawnInterval
-		if (this.player.y > spawnThreshold) {
+		// Spawn platforms ahead of player - handle multiple spawns per frame if falling fast
+		// Always maintain platforms at least 300px ahead of player
+		const playerAheadMargin = 300
+		const spawnAheadTarget = this.player.y + playerAheadMargin
+		
+		let spawnsThisFrame = 0
+		const maxSpawnsPerFrame = 10 // Safety limit
+		
+		while (this.lastSpawnY < spawnAheadTarget && spawnsThisFrame < maxSpawnsPerFrame) {
 			this.spawnPlatform()
-			this.updatePhysicsCollisions()
+			spawnsThisFrame++
+		}
+		
+		if (spawnsThisFrame > 3 && this.debugMode) {
+			console.log(`⚡ Fast falling! Spawned ${spawnsThisFrame} platforms to catch up`)
 		}
 
 		this.cleanupOffscreenObjects()
 
+		// EMERGENCY DEBUG: Log everything when hovering (low but positive velocity)
+		if (playerBody.velocity.y > 0 && playerBody.velocity.y < 200 && this.debugMode) {
+			const nearbyPlatforms = this.platforms
+				.filter(p => !p.isDestroyed && Math.abs(p.y - this.player.y) < 100)
+				.map(p => ({ 
+					y: p.y.toFixed(0), 
+					type: p.platformType, 
+					dist: (p.y - this.player.y).toFixed(0),
+					top: ((p.body as any).top).toFixed(0),
+					playerBottom: playerBody.bottom.toFixed(0)
+				}))
+			const nearbyEnemies = this.enemies
+				.filter(e => !e.isDestroyed && Math.abs(e.y - this.player.y) < 100)
+				.map(e => ({ y: e.y.toFixed(0), dist: (e.y - this.player.y).toFixed(0) }))
+			
+			console.log(`🐌 HOVERING! Y=${this.player.y.toFixed(0)}, VelY=${playerBody.velocity.y.toFixed(1)}, Bottom=${playerBody.bottom.toFixed(0)}`)
+			console.log(`  Platforms:`, nearbyPlatforms)
+			console.log(`  Enemies:`, nearbyEnemies)
+			console.log(`  Last bounce Y: ${this.lastBounceY.toFixed(0)}, Dist since: ${Math.abs(this.player.y - this.lastBounceY).toFixed(0)}`)
+		}
+
 		// ONLY check bounce collisions if not in cooldown
 		if (!this.justBounced) {
-			this.checkBounceCollisions()
+			try {
+				this.checkBounceCollisions()
+			} catch (error) {
+				console.error('❌ Error in checkBounceCollisions:', error)
+				// Reset bounce state to prevent softlock
+				this.justBounced = false
+			}
 		}
 
 		if (this.debugMode) {
@@ -118,7 +164,14 @@ export default class VerticalScrolling extends Phaser.Scene {
 		}
 
 		this.background.tilePositionY = this.cameras.main.scrollY * 0.5
-		this.scoreText.setText(`Score: ${this.score}\nDepth: ${this.distanceTraveled}m\nPlatforms: ${this.platforms.length}`)
+		
+		const activeColliders = this.physics.world.colliders.getActive().length
+		this.scoreText.setText(
+			`Score: ${this.score}\n` +
+			`Depth: ${this.distanceTraveled}m\n` +
+			`Platforms: ${this.platforms.length}\n` +
+			`Colliders: ${activeColliders}`
+		)
 
 		if (this.player.isDead()) {
 			this.gameOver()
@@ -152,7 +205,14 @@ export default class VerticalScrolling extends Phaser.Scene {
 	}
 
 	private setupCamera() {
-		this.cameras.main.setBounds(0, -1000, this.scale.width, 20000)
+		// Camera bounds for infinite falling
+		const worldHeight = 100000
+		this.cameras.main.setBounds(0, -1000, this.scale.width, worldHeight)
+		// No physics world bounds needed - player has world bounds disabled
+		
+		console.log(`📷 Camera bounds: Y from -1000 to ${worldHeight - 1000}`)
+		console.log(`   Player world bounds: DISABLED (infinite falling)`)
+		
 		this.cameras.main.startFollow(this.player, true, 0, 0.1)
 	}
 
@@ -165,29 +225,6 @@ export default class VerticalScrolling extends Phaser.Scene {
 			})
 			.setScrollFactor(0)
 			.setDepth(100)
-	}
-
-	private updatePhysicsCollisions() {
-		this.physics.world.colliders.getActive().forEach((collider) => {
-			collider.destroy()
-		})
-
-		const solidPlatforms = this.platforms.filter(
-			(p) => !p.isDestroyed && p.platformType === "solid"
-		)
-		
-		solidPlatforms.forEach((platform) => {
-			this.physics.add.collider(this.player, platform)
-		})
-
-		const allActivePlatforms = this.platforms.filter((p) => !p.isDestroyed)
-		this.enemies.forEach((enemy) => {
-			if (!enemy.isDestroyed) {
-				allActivePlatforms.forEach((platform) => {
-					this.physics.add.collider(enemy, platform)
-				})
-			}
-		})
 	}
 
 	private spawnPlatform() {
@@ -204,6 +241,37 @@ export default class VerticalScrolling extends Phaser.Scene {
 		const platform = new Platform(this, x, y, platformType)
 		this.platforms.push(platform)
 
+		// Add collision for solid platforms and store the collider reference
+		if (platformType === "solid") {
+			const collider = this.physics.add.collider(
+				this.player, 
+				platform,
+				() => {
+					// Collision callback - log first few times for debugging
+					if (this.debugMode && this.platforms.length < 30) {
+						console.log(`💥 Player collided with SOLID platform at Y=${platform.y.toFixed(0)}`)
+					}
+				},
+				(player, plat) => {
+					// Process callback - ensure the collision is valid
+					// This runs before collision resolution
+					const playerBody = (player as Player).body as Phaser.Physics.Arcade.Body
+					const platformBody = (plat as Platform).body as Phaser.Physics.Arcade.StaticBody
+					
+					// Only collide if player is falling onto platform from above
+					return playerBody.velocity.y > 0 && playerBody.bottom <= platformBody.top + 20
+				},
+				this
+			)
+			this.platformColliders.set(platform, collider)
+			
+			if (this.debugMode && this.platforms.length < 25) {
+				console.log(`✅ Created SOLID platform at Y=${y.toFixed(0)} with collider`)
+			}
+		} else if (this.debugMode && this.platforms.length < 25) {
+			console.log(`🟧 Created BREAKABLE platform at Y=${y.toFixed(0)} (no collider, manual bounce)`)
+		}
+
 		const enemyRand = Math.random()
 		if (enemyRand < this.enemySpawnChance) {
 			const enemyX = x + platformWidth / 2
@@ -217,13 +285,15 @@ export default class VerticalScrolling extends Phaser.Scene {
 	private spawnEnemy(x: number, y: number, platform: Platform) {
 		const enemy = new Enemy(this, x, y, platform)
 		this.enemies.push(enemy)
+		
+		// Add collision with the home platform immediately
 		this.physics.add.collider(enemy, platform)
 	}
 
 	private checkBounceCollisions() {
 		const playerBody = this.player.body as Phaser.Physics.Arcade.Body
 		
-		// MUST be moving downward with significant velocity
+		// MUST be moving downward with significant velocity to bounce
 		if (playerBody.velocity.y < 100) {
 			return
 		}
@@ -240,12 +310,27 @@ export default class VerticalScrolling extends Phaser.Scene {
 		const playerLeft = playerBody.left
 		const playerRight = playerBody.right
 
+		// Debug: log all breakable platforms being checked
+		const breakablePlatforms = this.platforms.filter(p => 
+			!p.isDestroyed && p.active && p.platformType === "breakable"
+		)
+		
+		if (this.debugMode && breakablePlatforms.length > 0) {
+			console.log(`🔍 Checking ${breakablePlatforms.length} breakable platforms. Player at Y=${this.player.y.toFixed(0)}, bottom=${playerBottom.toFixed(0)}`)
+		}
+
 		// Check breakable platforms - ONLY platforms BELOW the player
 		let nearestBreakable: Platform | null = null
 		let nearestBreakableDist = Infinity
 
 		for (const platform of this.platforms) {
 			if (platform.isDestroyed || !platform.active || platform.platformType !== "breakable") {
+				continue
+			}
+
+			// Safety check - ensure body exists
+			if (!platform.body) {
+				console.warn('⚠️ Platform has no body:', platform)
 				continue
 			}
 
@@ -256,6 +341,9 @@ export default class VerticalScrolling extends Phaser.Scene {
 
 			// Only check platforms BELOW the player
 			if (platformTop < playerBottom) {
+				if (this.debugMode) {
+					console.log(`  ⬆️ Skipping platform at Y=${platform.y.toFixed(0)} (above player, top=${platformTop.toFixed(0)})`)
+				}
 				continue
 			}
 
@@ -267,6 +355,10 @@ export default class VerticalScrolling extends Phaser.Scene {
 				(playerCenterX >= platformLeft && playerCenterX <= platformRight) ||
 				(playerLeft < platformRight && playerRight > platformLeft)
 
+			if (this.debugMode && vertDist < 50) {
+				console.log(`  📍 Platform at Y=${platform.y.toFixed(0)}, vertDist=${vertDist.toFixed(1)}, overlap=${hasHorizontalOverlap}`)
+			}
+
 			if (hasHorizontalOverlap && vertDist < nearestBreakableDist) {
 				nearestBreakableDist = vertDist
 				nearestBreakable = platform
@@ -275,7 +367,7 @@ export default class VerticalScrolling extends Phaser.Scene {
 
 		// If we found a nearby breakable within collision range
 		if (nearestBreakable && nearestBreakableDist <= 12) {
-			console.log(`BOUNCE on BREAKABLE at Y=${nearestBreakable.y} (dist=${nearestBreakableDist.toFixed(1)}px)`)
+			console.log(`⚡ BOUNCE on BREAKABLE at Y=${nearestBreakable.y.toFixed(0)} (dist=${nearestBreakableDist.toFixed(1)}px)`)
 			this.triggerBounce()
 			nearestBreakable.breakPlatform()
 			this.score += 15
@@ -288,6 +380,12 @@ export default class VerticalScrolling extends Phaser.Scene {
 
 		for (const enemy of this.enemies) {
 			if (enemy.isDestroyed || !enemy.active) {
+				continue
+			}
+
+			// Safety check - ensure body exists
+			if (!enemy.body) {
+				console.warn('⚠️ Enemy has no body:', enemy)
 				continue
 			}
 
@@ -313,7 +411,7 @@ export default class VerticalScrolling extends Phaser.Scene {
 		}
 
 		if (nearestEnemy && nearestEnemyDist <= 12) {
-			console.log(`BOUNCE on ENEMY at Y=${nearestEnemy.y} (dist=${nearestEnemyDist.toFixed(1)}px)`)
+			console.log(`⚡ BOUNCE on ENEMY at Y=${nearestEnemy.y.toFixed(0)} (dist=${nearestEnemyDist.toFixed(1)}px)`)
 			this.triggerBounce()
 			nearestEnemy.destroy()
 			this.score += 50
@@ -346,6 +444,63 @@ export default class VerticalScrolling extends Phaser.Scene {
 				}
 			}
 		})
+	}
+
+	private handleSolidPlatformCollisions() {
+		const playerBody = this.player.body as Phaser.Physics.Arcade.Body
+		const playerBottom = playerBody.bottom
+		const playerLeft = playerBody.left
+		const playerRight = playerBody.right
+		
+		// Only check for solid platform collisions if falling with decent velocity
+		if (playerBody.velocity.y < 50) {
+			return
+		}
+
+		// Don't re-land on same platform immediately
+		if (this.solidLandingCooldown) {
+			return
+		}
+
+		for (const platform of this.platforms) {
+			if (platform.isDestroyed || !platform.active || platform.platformType !== "solid") {
+				continue
+			}
+
+			const platformBody = platform.body as Phaser.Physics.Arcade.StaticBody
+			const platformTop = platformBody.top
+			const platformLeft = platformBody.left
+			const platformRight = platformBody.right
+
+			// Check if player is landing on this platform from above
+			const vertDist = platformTop - playerBottom
+			
+			// CRITICAL FIX: Only trigger when platformTop is BELOW playerBottom (vertDist >= 0)
+			// and within landing range. Don't trigger if we're already past the platform (vertDist < 0)
+			if (vertDist >= 0 && vertDist <= 15) {
+				// Check horizontal overlap
+				const hasOverlap = playerRight > platformLeft && playerLeft < platformRight
+				
+				if (hasOverlap) {
+					// Land on platform - NO BOUNCE, just stop
+					this.player.y = platformTop - playerBody.height / 2
+					playerBody.setVelocityY(0)
+					this.lastSolidLandingY = this.player.y
+					this.solidLandingCooldown = true
+					
+					console.log(`🟢 Landed on SOLID platform at Y=${platform.y.toFixed(0)}, vertDist=${vertDist.toFixed(1)}`)
+					
+					// Release cooldown after a short delay
+					this.time.delayedCall(300, () => {
+						this.solidLandingCooldown = false
+					})
+					
+					return
+				} else if (this.debugMode && vertDist <= 20) {
+					console.log(`  ⬜ Near solid platform at Y=${platform.y.toFixed(0)}, vertDist=${vertDist.toFixed(1)}, but no overlap`)
+				}
+			}
+		}
 	}
 
 	private triggerBounce() {
@@ -403,7 +558,7 @@ export default class VerticalScrolling extends Phaser.Scene {
 		const playerBody = this.player.body as Phaser.Physics.Arcade.Body
 		const velY = playerBody.velocity.y.toFixed(1)
 		const posY = this.player.y.toFixed(1)
-		const bounceState = this.justBounced ? "LOCKED" : "READY ✓"
+		const bounceState = this.justBounced ? "LOCKED 🔒" : "READY ✓"
 		const distSinceBounce = Math.abs(this.player.y - this.lastBounceY).toFixed(1)
 		
 		// Find nearest bounceable object
@@ -441,10 +596,19 @@ export default class VerticalScrolling extends Phaser.Scene {
 
 	private cleanupOffscreenObjects() {
 		const cameraTop = this.cameras.main.scrollY - 200
+		const maxPlatforms = 30 // Reduced limit to prevent memory issues
+		const maxEnemies = 15 // Limit enemies too
 
 		const beforeCount = this.platforms.length
 		this.platforms = this.platforms.filter((platform) => {
 			if (platform.y < cameraTop || platform.isDestroyed) {
+				// Destroy the collider if it exists
+				const collider = this.platformColliders.get(platform)
+				if (collider) {
+					collider.destroy()
+					this.platformColliders.delete(platform)
+				}
+				
 				if (!platform.isDestroyed) {
 					platform.destroy()
 				}
@@ -453,8 +617,27 @@ export default class VerticalScrolling extends Phaser.Scene {
 			return true
 		})
 		
-		if (this.platforms.length < beforeCount) {
-			this.updatePhysicsCollisions()
+		// Emergency cleanup if we have too many platforms
+		if (this.platforms.length > maxPlatforms) {
+			const oldestPlatforms = this.platforms
+				.sort((a, b) => a.y - b.y) // Sort by Y position (oldest = lowest Y)
+				.slice(0, this.platforms.length - maxPlatforms)
+			
+			oldestPlatforms.forEach(p => {
+				// Destroy the collider
+				const collider = this.platformColliders.get(p)
+				if (collider) {
+					collider.destroy()
+					this.platformColliders.delete(p)
+				}
+				
+				if (!p.isDestroyed) {
+					p.destroy()
+				}
+			})
+			
+			this.platforms = this.platforms.filter(p => !p.isDestroyed)
+			console.log(`🧹 Emergency cleanup! Removed ${oldestPlatforms.length} old platforms`)
 		}
 
 		this.enemies = this.enemies.filter((enemy) => {
@@ -466,6 +649,27 @@ export default class VerticalScrolling extends Phaser.Scene {
 			}
 			return true
 		})
+		
+		// Emergency enemy cleanup if too many
+		if (this.enemies.length > maxEnemies) {
+			const oldestEnemies = this.enemies
+				.sort((a, b) => a.y - b.y)
+				.slice(0, this.enemies.length - maxEnemies)
+			
+			oldestEnemies.forEach(e => {
+				if (!e.isDestroyed) {
+					e.destroy()
+				}
+			})
+			
+			this.enemies = this.enemies.filter(e => !e.isDestroyed)
+			console.log(`🧹 Emergency enemy cleanup! Removed ${oldestEnemies.length} old enemies`)
+		}
+		
+		// Log if we cleaned up a lot
+		if (this.debugMode && beforeCount - this.platforms.length > 5) {
+			console.log(`🗑️ Cleaned up ${beforeCount - this.platforms.length} platforms (now ${this.platforms.length} active)`)
+		}
 	}
 
 	private updateDifficulty() {
@@ -478,7 +682,7 @@ export default class VerticalScrolling extends Phaser.Scene {
 	}
 
 	private gameOver() {
-		console.log(`GAME OVER - Score: ${this.score}, Depth: ${this.distanceTraveled}m`)
+		console.log(`💀 GAME OVER - Score: ${this.score}, Depth: ${this.distanceTraveled}m`)
 		
 		const gameOverText = this.add
 			.text(

@@ -1,12 +1,12 @@
 import Phaser from "phaser"
 
-//NOTE: CURRENTLY IN debug mode bc i'm trying to figure out why the bounce loop was happening.
+//NOTE: FIXED! will remove after this push
 
 export default class Player extends Phaser.Physics.Arcade.Sprite {
 	private cursors: Phaser.Types.Input.Keyboard.CursorKeys
 	private keys: any
 	private canShoot = true
-	private shootCooldown = 200
+	private shootCooldown = 200 // milliseconds
 
 	public width = 24
 	public height = 24
@@ -15,9 +15,9 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
 	public bounceForce = -450 // Bounce velocity when landing on enemy/breakable platform
 
 	constructor(scene: Phaser.Scene, x: number, y: number) {
-		// Simple player sprite (white square)
+		// Create a simple player sprite (white square)
 		const graphics = scene.make.graphics({ x: 0, y: 0 }, false)
-		graphics.fillStyle(0xffffff, 1)
+		graphics.fillStyle(0xffffff, 1) // White color
 		graphics.fillRect(0, 0, 24, 24)
 		graphics.generateTexture("player_sprite", 24, 24)
 		graphics.destroy()
@@ -31,9 +31,11 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
 		// Configure Physics
 		const body = this.body as Phaser.Physics.Arcade.Body
 		body.setSize(this.width, this.height)
-		body.setCollideWorldBounds(true, 0, 1, false) // Don't bounce on world bounds
+		// NO world bounds collision for infinite falling game!
+		body.setCollideWorldBounds(false)
 		body.setMaxVelocity(this.max_velocity.x, this.max_velocity.y)
 		
+		// CRITICAL: Set bounce to 0 so Phaser doesn't auto-bounce on collisions
 		body.setBounce(0, 0)
 
 		// Setup Inputs
@@ -54,6 +56,16 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
 			(this.cursors.right.isDown || this.keys.d.isDown ? 1 : 0)
 
 		body.setVelocityX(horizontalInput * this.moveSpeed)
+
+		// Keep player on screen horizontally (manual boundary check since world bounds disabled)
+		const gameWidth = this.scene.scale.width
+		if (this.x < this.width / 2) {
+			this.x = this.width / 2
+			body.setVelocityX(0)
+		} else if (this.x > gameWidth - this.width / 2) {
+			this.x = gameWidth - this.width / 2
+			body.setVelocityX(0)
+		}
 
 		// Shooting (downward) - only works while in air
 		if (this.keys.space.isDown && this.canShoot && !body.blocked.down) {
