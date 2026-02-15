@@ -1,6 +1,6 @@
 import Phaser from "phaser"
 
-//NOTE: FIXED! will remove after this push
+//NOTE: FIXED! will remove debug
 
 export default class Player extends Phaser.Physics.Arcade.Sprite {
 	private cursors: Phaser.Types.Input.Keyboard.CursorKeys
@@ -8,21 +8,15 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
 	private canShoot = true
 	private shootCooldown = 200 // milliseconds
 
-	public width = 24
-	public height = 24
+	public width = 32
+	public height = 32
 	public max_velocity = { x: 300, y: 1000 }
 	public moveSpeed = 200
 	public bounceForce = -450 // Bounce velocity when landing on enemy/breakable platform
 
 	constructor(scene: Phaser.Scene, x: number, y: number) {
-		// Create a simple player sprite (white square)
-		const graphics = scene.make.graphics({ x: 0, y: 0 }, false)
-		graphics.fillStyle(0xffffff, 1) // White color
-		graphics.fillRect(0, 0, 24, 24)
-		graphics.generateTexture("player_sprite", 24, 24)
-		graphics.destroy()
-
-		super(scene, x, y, "player_sprite")
+		// Spritesheet sourced from https://penzilla.itch.io/hooded-protagonist
+		super(scene, x, y, "player_spritesheet", 0)
 
 		// Add to scene and physics
 		scene.add.existing(this)
@@ -72,6 +66,33 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
 			this.shoot()
 		}
 
+		// Animation logic
+		const isFalling = body.velocity.y > 150 // Falling threshold
+		
+		if (isFalling) {
+			// Play fall animation when falling fast
+			if (this.anims.currentAnim?.key !== "player_fall") {
+				this.play("player_fall")
+			}
+		} else if (horizontalInput < 0) {
+			// Moving left - flip the sprite
+			this.setFlipX(true)
+			if (this.anims.currentAnim?.key !== "player_move_left") {
+				this.play("player_move_left")
+			}
+		} else if (horizontalInput > 0) {
+			// Moving right - don't flip
+			this.setFlipX(false)
+			if (this.anims.currentAnim?.key !== "player_move_right") {
+				this.play("player_move_right")
+			}
+		} else {
+			// Idle - no horizontal movement
+			this.setFlipX(false)
+			if (this.anims.currentAnim?.key !== "player_idle") {
+				this.play("player_idle")
+			}
+		}
 	}
 
 	shoot() {
@@ -102,7 +123,11 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
 		// Called ONLY by the game when landing on enemy or breakable platform
 		const body = this.body as Phaser.Physics.Arcade.Body
 		body.setVelocityY(this.bounceForce)
-		console.log(`🎈 Player.bounce() called - velocity set to ${this.bounceForce}`)
+		
+		// Play bounce animation
+		this.play("player_bounce")
+		
+		console.log(`Player.bounce() called - velocity set to ${this.bounceForce}`)
 	}
 
 	// Check if player fell off the bottom of the screen

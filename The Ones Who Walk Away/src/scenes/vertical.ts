@@ -45,6 +45,13 @@ export default class VerticalScrolling extends Phaser.Scene {
 	}
 
 	preload() {
+		// Load player sprite sheet
+		this.load.spritesheet("player_spritesheet", "/AnimationSheet_Character.png", {
+			frameWidth: 32,
+			frameHeight: 32,
+		})
+		
+		// Create bullet texture
 		const graphics = this.make.graphics({ x: 0, y: 0 }, false)
 		graphics.fillStyle(0xffff00, 1)
 		graphics.fillCircle(4, 4, 4)
@@ -54,6 +61,7 @@ export default class VerticalScrolling extends Phaser.Scene {
 
 	create() {
 		this.createBackground()
+		this.createPlayerAnimations()
 		this.createPlayer()
 		this.setupCamera()
 		this.createUI()
@@ -198,6 +206,42 @@ export default class VerticalScrolling extends Phaser.Scene {
 			.tileSprite(0, 0, width, height, "background")
 			.setOrigin(0, 0)
 			.setScrollFactor(0)
+	}
+
+	private createPlayerAnimations() {
+		// Row 1 (frames 0-1): Neutral/Idle animation (first TWO sprites only)
+		this.anims.create({
+			key: "player_idle",
+			frames: this.anims.generateFrameNumbers("player_spritesheet", { start: 0, end: 1 }),
+			frameRate: 6,
+			repeat: -1, // Loop forever
+		})
+
+		// Row 4 (frames 24-31): Move Right animation
+		this.anims.create({
+			key: "player_move_right",
+			frames: this.anims.generateFrameNumbers("player_spritesheet", { start: 24, end: 31 }),
+			frameRate: 12,
+			repeat: -1,
+		})
+
+		// Row 4 (frames 24-31): Move Left animation (will be flipped in code)
+		this.anims.create({
+			key: "player_move_left",
+			frames: this.anims.generateFrameNumbers("player_spritesheet", { start: 24, end: 31 }),
+			frameRate: 12,
+			repeat: -1,
+		})
+
+		// Row 5, sprite 6 (frame 37): Fall animation (single frame)
+		// Row 5 starts at frame 32 (4 rows * 8 frames = 32), so sprite 6 is at index 32 + 5 = 37
+		this.anims.create({
+			key: "player_fall",
+			frames: [{ key: "player_spritesheet", frame: 37 }],
+			frameRate: 1,
+		})
+
+		console.log("✅ Player animations created")
 	}
 
 	private createPlayer() {
