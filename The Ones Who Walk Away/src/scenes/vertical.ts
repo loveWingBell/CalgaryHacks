@@ -66,7 +66,10 @@ class VerticalScrolling extends Phaser.Scene {
 		}
 		// Check for Right movement (Right Arrow OR D key)
 		else if (this.cursors.right.isDown || this.keys.d.isDown) {
-			this.player.setVelocityX(speed);
+			if (this.player.x < this.scale.width - this.player.width / 2) {
+				this.player.setVelocityX(speed);
+				console.log(this.player.x);
+			}
 		}
 		// Check for jump input
 
